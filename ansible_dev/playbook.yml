@@ -3,7 +3,7 @@
   become: true
 
   vars:
-    repo_url: "git@github.com:YeyoM/nueveuno-blueprint.git" # CHANGE THIS TO THE URL OF THE REPO
+    repo_url: "git@github.com:YourUsername/YourRepo.git" # CHANGE THIS TO THE URL OF THE REPO
     app_dir: "/opt/app"
     docker_compose_file: "{{ app_dir }}/docker-compose.yml"
     ssh_key_name: "github_ansible_key"
