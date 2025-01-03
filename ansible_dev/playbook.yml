@@ -1,0 +1,132 @@
+- name: Configure VPS for Docker-based application
+  hosts: vps
+  become: true
+
+  vars:
+    repo_url: "git@github.com:YeyoM/nueveuno-blueprint.git" # CHANGE THIS TO THE URL OF THE REPO
+    app_dir: "/opt/app"
+    docker_compose_file: "{{ app_dir }}/docker-compose.yml"
+    ssh_key_name: "github_ansible_key"
+
+  tasks:
+    - name: Add user to sudo group
+      user:
+        name: "{{ ansible_user }}"
+        groups: sudo
+        append: yes
+
+    - name: Allow passwordless sudo for the user
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: "^{{ ansible_user }}"
+        line: "username ALL=(ALL) NOPASSWD:ALL"
+        validate: "/usr/sbin/visudo -cf %s"
+
+    - name: Install Docker dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Add user to Docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Install docker-compose from official github repo
+      remote_user: ansible_ubuntu_demo
+      get_url:
+        url: https://github.com/docker/compose/releases/download/v2.32.1/docker-compose-linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: "u+x,g+x"
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Install git
+      apt:
+        name: git
+        state: present
+
+    - name: Ensure SSH key for GitHub exists
+      stat:
+        path: "~/.ssh/{{ ssh_key_name }}"
+      register: ssh_key
+
+    - name: Generate SSH key for GitHub
+      user:
+        name: "{{ ansible_user }}"
+        generate_ssh_key: yes
+        ssh_key_file: "~/.ssh/{{ ssh_key_name }}"
+        ssh_key_bits: 4096
+        ssh_key_type: rsa
+        ssh_key_passphrase: ""
+        force: no
+
+    - name: Display the SSH key for GitHub setup # In order to see this, run on verbose mode (-vvv)
+      ansible.builtin.shell: cat ~/.ssh/{{ ssh_key_name }}.pub
+
+    - name: Add GitHub to known hosts
+      ansible.builtin.known_hosts:
+        path: ~/.ssh/known_hosts
+        name: github.com
+        key: "{{ lookup('pipe', 'ssh-keyscan -t rsa github.com') }}"
+
+    - name: Start SSH agent, add SSH key and test connection to GitHub
+      ansible.builtin.shell: eval "$(ssh-agent -s)" && ssh-add ~/.ssh/{{ ssh_key_name }} && ssh -o StrictHostKeyChecking=no -T git@github.com
+      register: ssh_test
+      changed_when: false
+      failed_when: "'Hi' not in ssh_test.stderr"
+
+    - name: Clone the private repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        update: yes
+        key_file: "~/.ssh/{{ ssh_key_name }}"
+        version: main
+
+    - name: Ensure Docker Compose file exists
+      stat:
+        path: "{{ docker_compose_file }}"
+      register: compose_file
+
+    - name: Stop Docker Compose services
+      community.docker.docker_compose_v2:
+        project_src: /opt/app
+        files:
+          - docker-compose.yml
+        state: absent
+
+        #- name: Remove Docker Containers, Images and Volumes
+        # ansible.builtin.shell: docker system prune -af --volumeC
+
+    - name: Pull and start Docker Compose services
+      community.docker.docker_compose_v2:
+        project_src: /opt/app
+        files:
+          - docker-compose.yml
+        build: always
